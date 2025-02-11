@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from datetime import datetime, timedelta
+from datetime import datetime
 import docker
 from prometheus_client import start_http_server, Gauge
 import os
@@ -18,9 +18,12 @@ signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 APP_NAME = "Docker services Prometheus exporter"
-SERVICES_METRIC = Gauge('docker_services',
-                        'Docker Swarm Services',
-                        ['service_id', 'service_name', 'replicas', 'running_tasks', 'image', 'docker_hostname'])
+INSTANCES_METRIC = Gauge('docker_service_instances',
+                         'Number of desired replicas for a service',
+                         ['service_id', 'service_name', 'image', 'docker_hostname'])
+RUNNING_TASKS_METRIC = Gauge('docker_service_running_tasks',
+                             'Number of running tasks for a service',
+                             ['service_id', 'service_name', 'image', 'docker_hostname'])
 
 PROMETHEUS_EXPORT_PORT = int(os.getenv('PROMETHEUS_EXPORT_PORT', '9000'))
 DOCKER_HOSTNAME = os.getenv('DOCKER_HOSTNAME', platform.node())
@@ -37,7 +40,8 @@ def collect_services():
     client = docker.DockerClient()
     try:
         services = client.services.list()
-        SERVICES_METRIC.clear() # Clear previous metrics before updating
+        INSTANCES_METRIC.clear()
+        RUNNING_TASKS_METRIC.clear()
 
         for service in services:
             details = service.attrs
@@ -49,17 +53,21 @@ def collect_services():
             replicas = mode.get('Replicated', {}).get('Replicas', 0) if 'Replicated' in mode else 1
 
             tasks = service.tasks(filters={'service': service_id})
-
             running_tasks = sum(1 for task in tasks if task.get('Status', {}).get('State') == 'running')
 
-            SERVICES_METRIC.labels(
+            INSTANCES_METRIC.labels(
                 service_id=service_id,
                 service_name=service_name,
-                replicas=replicas,
-                running_tasks=running_tasks,
                 image=image,
                 docker_hostname=DOCKER_HOSTNAME
             ).set(replicas)
+
+            RUNNING_TASKS_METRIC.labels(
+                service_id=service_id,
+                service_name=service_name,
+                image=image,
+                docker_hostname=DOCKER_HOSTNAME
+            ).set(running_tasks)
     finally:
         client.close()
 
